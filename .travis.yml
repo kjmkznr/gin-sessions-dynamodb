@@ -1,0 +1,15 @@
+language: go
+
+services:
+  - docker
+
+before_install:
+  - docker pull amazon/dynamodb-local:latest
+  - docker run -d -p 127.0.0.1:8000:8000 amazon/dynamodb-local:latest
+  - docker ps -a
+
+script:
+  - go test -v -covermode=atomic -coverprofile=coverage.out ./...
+
+after_success:
+  - bash <(curl -s https://codecov.io/bash)
