@@ -1,22 +1,23 @@
 package dynamodb
 
 import (
+	"context"
 	"math/rand"
 	"testing"
+	"time"
 
-	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/aws/credentials"
-	"github.com/aws/aws-sdk-go/aws/session"
-	"github.com/aws/aws-sdk-go/service/dynamodb"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/credentials"
+	awsdynamodb "github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	"github.com/gin-contrib/sessions"
 	"github.com/gin-contrib/sessions/tester"
-	"github.com/nabeken/gorilla-sessions-dynamodb/dynamostore"
 )
 
 const dynamoDBLocal = "http://127.0.0.1:8000"
 
 func randSeq(n int) string {
-	var letters = []rune("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")
+	letters := []rune("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")
 	b := make([]rune, n)
 	for i := range b {
 		b[i] = letters[rand.Intn(len(letters))]
@@ -24,22 +25,21 @@ func randSeq(n int) string {
 	return string(b)
 }
 
-func newTestCreateTableInput(tableName string) *dynamodb.CreateTableInput {
-	attributeName := aws.String(dynamostore.SessionIdHashKeyName)
-	return &dynamodb.CreateTableInput{
-		AttributeDefinitions: []*dynamodb.AttributeDefinition{
+func newTestCreateTableInput(tableName string) *awsdynamodb.CreateTableInput {
+	return &awsdynamodb.CreateTableInput{
+		AttributeDefinitions: []types.AttributeDefinition{
 			{
-				AttributeName: attributeName,
-				AttributeType: aws.String(dynamodb.ScalarAttributeTypeS),
+				AttributeName: aws.String(SessionIDHashKeyName),
+				AttributeType: types.ScalarAttributeTypeS,
 			},
 		},
-		KeySchema: []*dynamodb.KeySchemaElement{
+		KeySchema: []types.KeySchemaElement{
 			{
-				AttributeName: attributeName,
-				KeyType:       aws.String(dynamodb.KeyTypeHash),
+				AttributeName: aws.String(SessionIDHashKeyName),
+				KeyType:       types.KeyTypeHash,
 			},
 		},
-		ProvisionedThroughput: &dynamodb.ProvisionedThroughput{
+		ProvisionedThroughput: &types.ProvisionedThroughput{
 			ReadCapacityUnits:  aws.Int64(1),
 			WriteCapacityUnits: aws.Int64(1),
 		},
@@ -47,34 +47,27 @@ func newTestCreateTableInput(tableName string) *dynamodb.CreateTableInput {
 	}
 }
 
-// prepareDynamoDBTable prepares DynamoDB table and it returns table name.
-func prepareDynamoDBTable(dynamodbClient *dynamodb.DynamoDB) string {
-	dummyTableName := randSeq(10)
-
-	input := newTestCreateTableInput(dummyTableName)
-	dynamodbClient.CreateTable(input)
-
-	dynamodbClient.WaitUntilTableExists(&dynamodb.DescribeTableInput{
-		TableName: aws.String(dummyTableName),
-	})
-
-	return dummyTableName
+func prepareDynamoDBTable(ctx context.Context, client *awsdynamodb.Client) string {
+	name := randSeq(10)
+	_, _ = client.CreateTable(ctx, newTestCreateTableInput(name))
+	_ = awsdynamodb.NewTableExistsWaiter(client).Wait(ctx,
+		&awsdynamodb.DescribeTableInput{TableName: aws.String(name)},
+		2*time.Minute,
+	)
+	return name
 }
 
 var newStore = func(_ *testing.T) sessions.Store {
-	sess, err := session.NewSession(&aws.Config{
-		Region:      aws.String("ap-northeast-1"),
-		Endpoint:    aws.String(dynamoDBLocal),
-		Credentials: credentials.NewStaticCredentials("dummy", "dummy", "dummy"),
-	})
-	if err != nil {
-		panic(err)
+	ctx := context.Background()
+	cfg := aws.Config{
+		Region:      "ap-northeast-1",
+		Credentials: credentials.NewStaticCredentialsProvider("dummy", "dummy", "dummy"),
 	}
-
-	db := dynamodb.New(sess)
-	dummyTableName := prepareDynamoDBTable(db)
-	store := NewStore(db, dummyTableName, []byte("secret"))
-	return store
+	client := awsdynamodb.NewFromConfig(cfg, func(o *awsdynamodb.Options) {
+		o.BaseEndpoint = aws.String(dynamoDBLocal)
+	})
+	name := prepareDynamoDBTable(ctx, client)
+	return NewStore(client, name, []byte("secret"))
 }
 
 func TestDynamoDB_SessionGetSet(t *testing.T) {
