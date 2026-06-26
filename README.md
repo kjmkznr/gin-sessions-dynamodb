@@ -1,43 +1,45 @@
 # gin-session-dynamodb
 
-[![PkgGoDev](https://pkg.go.dev/badge/github.com/kjmkznr/gin-sessions-dynamodb)](https://pkg.go.dev/github.com/kjmkznr/gin-sessions-dynamodb)
-[![Build Status](https://travis-ci.org/kjmkznr/gin-sessions-dynamodb.svg?branch=master)](https://travis-ci.org/kjmkznr/gin-sessions-dynamodb)
+[![PkgGoDev](https://pkg.go.dev/badge/github.com/kjmkznr/gin-sessions-dynamodb/v2)](https://pkg.go.dev/github.com/kjmkznr/gin-sessions-dynamodb/v2)
 
-A session store backend for [gin-contrib/sessions](https://github.com/gin-contrib/sessions/).
+A session store backend for [gin-contrib/sessions](https://github.com/gin-contrib/sessions/) using AWS DynamoDB.
+
+## Requirements
+
+- Go 1.21+
+- AWS SDK for Go v2
 
 ## Usage
 
-Import it in your code:
-
 ```go
-import "github.com/kjmkznr/gin-sessions-dynamodb"
+import dynamodbstore "github.com/kjmkznr/gin-sessions-dynamodb/v2"
 ```
 
-## Basic Examples
+## Basic Example
 
-[embedmd]:# (example/main.go go)
 ```go
 package main
 
 import (
-	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/aws/session"
-	"github.com/aws/aws-sdk-go/service/dynamodb"
+	"context"
+
+	"github.com/aws/aws-sdk-go-v2/config"
+	awsdynamodb "github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/gin-contrib/sessions"
 	"github.com/gin-gonic/gin"
-	dynamodbstore "github.com/kjmkznr/gin-sessions-dynamodb"
+	dynamodbstore "github.com/kjmkznr/gin-sessions-dynamodb/v2"
 )
 
 func main() {
 	r := gin.Default()
-	sess, err := session.NewSession(&aws.Config{
-		Region: aws.String("ap-northeast-1"),
-	})
+
+	cfg, err := config.LoadDefaultConfig(context.Background(),
+		config.WithRegion("ap-northeast-1"),
+	)
 	if err != nil {
 		panic(err)
 	}
-
-	ddb := dynamodb.New(sess)
+	ddb := awsdynamodb.NewFromConfig(cfg)
 	store := dynamodbstore.NewStore(ddb, "SessionTable", []byte("secret"))
 	r.Use(sessions.Sessions("mysession", store))
 
@@ -52,8 +54,7 @@ func main() {
 			count++
 		}
 		sess.Set("count", count)
-		err := sess.Save()
-		if err != nil {
+		if err := sess.Save(); err != nil {
 			println(err.Error())
 		}
 		c.JSON(200, gin.H{"count": count})
@@ -64,14 +65,15 @@ func main() {
 
 ## DynamoDB Table Schema
 
-* Hash Key: session_id (S)
-* Attributes
-    - session_data (S)
-    - session_expires_at (N)
+| Attribute | Type | Role |
+|---|---|---|
+| `SessionID` | String (S) | Hash key |
+| `Data` | String (S) | gob-encoded session values (base64) |
+| `ExpiresAt` | Number (N) | Unix epoch seconds (DynamoDB TTL) |
 
 ## Testing
 
-```shell script
+```shell
 $ docker run -p 8000:8000 -d amazon/dynamodb-local:latest
-$ go test
+$ go test ./...
 ```
