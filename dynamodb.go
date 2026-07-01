@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/base32"
-	"encoding/base64"
 	"encoding/gob"
 	"errors"
 	"net/http"
@@ -19,7 +18,16 @@ import (
 	gsessions "github.com/gorilla/sessions"
 )
 
-const SessionIDHashKeyName = "SessionID"
+// These attribute names must match the values used by v1 so that existing
+// tables and session items remain compatible after upgrading.
+const (
+	// SessionIDHashKeyName is the DynamoDB partition key attribute name for the session ID.
+	SessionIDHashKeyName = "session_id"
+	// SessionDataKeyName is the attribute name for the gob-encoded session data (stored as Binary).
+	SessionDataKeyName = "session_data"
+	// SessionExpiresName is the attribute name for the session expiration Unix time (stored as Number).
+	SessionExpiresName = "session_expires_at"
+)
 
 var DefaultSessionOptions = &gsessions.Options{
 	Path:   "/",
@@ -132,12 +140,12 @@ func (s *dynamoStore) load(ctx context.Context, sess *gsessions.Session) error {
 	if len(out.Item) == 0 {
 		return errors.New("session not found")
 	}
-	if expAV, ok := out.Item["ExpiresAt"].(*types.AttributeValueMemberN); ok {
+	if expAV, ok := out.Item[SessionExpiresName].(*types.AttributeValueMemberN); ok {
 		if isExpired(expAV.Value) {
 			return errors.New("session expired")
 		}
 	}
-	dataAV, ok := out.Item["Data"].(*types.AttributeValueMemberS)
+	dataAV, ok := out.Item[SessionDataKeyName].(*types.AttributeValueMemberB)
 	if !ok {
 		return errors.New("session data missing")
 	}
@@ -154,8 +162,8 @@ func (s *dynamoStore) save(ctx context.Context, sess *gsessions.Session) error {
 		TableName: &s.tableName,
 		Item: map[string]types.AttributeValue{
 			SessionIDHashKeyName: &types.AttributeValueMemberS{Value: sess.ID},
-			"Data":               &types.AttributeValueMemberS{Value: encoded},
-			"ExpiresAt":          &types.AttributeValueMemberN{Value: strconv.FormatInt(exp, 10)},
+			SessionDataKeyName:   &types.AttributeValueMemberB{Value: encoded},
+			SessionExpiresName:   &types.AttributeValueMemberN{Value: strconv.FormatInt(exp, 10)},
 		},
 	})
 	return err
@@ -171,19 +179,15 @@ func (s *dynamoStore) delete(ctx context.Context, id string) error {
 	return err
 }
 
-func encodeValues(v map[interface{}]interface{}) (string, error) {
+func encodeValues(v map[interface{}]interface{}) ([]byte, error) {
 	var buf bytes.Buffer
 	if err := gob.NewEncoder(&buf).Encode(v); err != nil {
-		return "", err
+		return nil, err
 	}
-	return base64.StdEncoding.EncodeToString(buf.Bytes()), nil
+	return buf.Bytes(), nil
 }
 
-func decodeValues(s string, v *map[interface{}]interface{}) error {
-	raw, err := base64.StdEncoding.DecodeString(s)
-	if err != nil {
-		return err
-	}
+func decodeValues(raw []byte, v *map[interface{}]interface{}) error {
 	return gob.NewDecoder(bytes.NewReader(raw)).Decode(v)
 }
 
